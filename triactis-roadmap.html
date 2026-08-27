@@ -213,6 +213,8 @@ textarea.inp{height:auto;padding:9px 12px;resize:vertical;min-height:60px}
 .help li{margin-bottom:7px}
 .help code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#F4F0E6;padding:1px 5px;border-radius:5px}
 .note{background:#FBF6E9;border:1px solid #EBDCB6;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#6B5A2E;margin-top:6px}
+.rownote{background:#FBF6E9;border:1px solid #EBDCB6;border-radius:8px;padding:6px 9px;font-size:11.5px;color:#6B5A2E;margin-top:5px;line-height:1.4}
+.critchain{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:#D97706}
 @media(max-width:880px){
   .ov{grid-template-columns:1fr 1fr}
   .row{grid-template-columns:22px 1fr;}
@@ -426,6 +428,19 @@ textarea.inp{height:auto;padding:9px 12px;resize:vertical;min-height:60px}
           <button class="opt" data-s="termine" aria-pressed="false">Terminé</button>
           <button class="opt" data-s="bloque" aria-pressed="false">Bloqué</button>
         </div>
+      </div>
+      <div class="field">
+        <label>Priorité (MoSCoW)</label>
+        <div class="seg" id="fPriority">
+          <button class="opt" data-p="" aria-pressed="true">—</button>
+          <button class="opt" data-p="must" aria-pressed="false">Must</button>
+          <button class="opt" data-p="should" aria-pressed="false">Should</button>
+          <button class="opt" data-p="could" aria-pressed="false">Could</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Commentaire</label>
+        <textarea class="inp" id="fNote" placeholder="Si non terminé : ce qui est fait, ce qui bloque, la prochaine action attendue"></textarea>
       </div>
       <div class="field">
         <label>Sous-tâche de (facultatif)</label>
@@ -754,6 +769,7 @@ function mergeRoadmap(remote, local, baseIds){
 }
 function persist(opts){
   opts=opts||{};
+  _critCache=null;
   if(state.mode==="shared"&&fbDoc&&fbDb){
     state.dirtyUntil=Date.now()+1500;
     clearTimeout(saveTimer);
@@ -821,12 +837,13 @@ function visibleEvents(){
   if(pr==="en-cours")l=l.filter(e=>statusKey(e)==="en-cours");
   else if(pr==="bloque")l=l.filter(e=>statusKey(e)==="bloque");
   else if(pr==="retard")l=l.filter(e=>(+e.progress||0)<100&&(e.end||e.start)<TODAY_ISO);
-  else if(pr==="critique")l=l.filter(e=>(e.tags||[]).includes("Chemin-Critique"));
+  else if(pr==="critique"){const cc=criticalChainSet().chain;l=l.filter(e=>(e.tags||[]).includes("Chemin-Critique")||cc.has(e.title));}
+  else if(pr==="must"||pr==="should"||pr==="could")l=l.filter(e=>e.priority===pr);
   return l;
 }
 function avgProgress(list){if(!list.length)return 0;return Math.round(list.reduce((s,e)=>s+(+e.progress||0),0)/list.length);}
 
-function renderAll(){renderOverview();renderFilterBar();renderView();populateQuickAdd();}
+function renderAll(){_critCache=null;renderOverview();renderFilterBar();renderView();populateQuickAdd();}
 
 /* ---- Overview strip ---- */
 function ringSVG(pct,size,color,stroke){
@@ -857,7 +874,8 @@ function renderOverview(){
 
 /* ---- Filter bar ---- */
 function renderFilterBar(){
-  const presets=[["","Tout"],["en-cours","En cours"],["bloque","Bloqués"],["retard","En retard"],["critique","Chemin critique"]];
+  const ccLen=criticalChainSet().length;
+  const presets=[["","Tout"],["en-cours","En cours"],["bloque","Bloqués"],["retard","En retard"],["critique",ccLen?`Chemin critique (${ccLen})`:"Chemin critique"],["must","Must"],["should","Should"],["could","Could"]];
   let html=`<div class="fb2">`;
   presets.forEach(([k,l])=>{html+=`<button class="preset${state.preset===k?" active":""}" data-preset="${k}">${l}</button>`;});
   state.projects.forEach(pp=>{const on=state.filters.has(pp.name);html+=`<button class="preset${on?" active":""}" data-projfilter="${esc(pp.name)}"><span class="pdot" style="background:${pp.color}"></span>${esc(pp.short)}</button>`;});
@@ -976,7 +994,7 @@ function renderToday(){
     heroHTML=`<div class="td-hero">
       <div class="lab"><span class="pj-sq" style="background:${pc}"></span>Ta prochaine action</div>
       <div class="htitle">${esc(hero.title)}</div>
-      <div class="hmeta"><span class="pj-chip"><span class="pj-sq" style="background:${pc}"></span>${esc(p)}</span>${tdStatusBadge(hero)}${pr}${dl}</div>
+      <div class="hmeta"><span class="pj-chip"><span class="pj-sq" style="background:${pc}"></span>${esc(p)}</span>${tdStatusBadge(hero)}${priorityBadgeHTML(hero)}${critChainBadgeHTML(hero)}${pr}${dl}</div>
       ${note}${depsLineHTML(hero)}
       <div class="hact"><button class="btn gold" data-open="${hero.id}">Ouvrir la tâche →</button><button class="btn" data-done="${hero.id}">✓ Marquer terminée</button></div>
     </div>`;
@@ -1049,7 +1067,8 @@ function renderFocus(){
   order.forEach(([k,label,cls,hint])=>{
     let items=list.filter(e=>focusBucket(e)===k);
     if(!items.length)return;
-    items.sort((a,b)=>(a.start||"").localeCompare(b.start||""));
+    const prank={must:0,should:1,could:2}; const rk=e=>prank[e.priority]!==undefined?prank[e.priority]:3;
+    items.sort((a,b)=>rk(a)-rk(b)||(a.start||"").localeCompare(b.start||""));
     const prog=avgProgress(items),key="h:"+k;
     const collapsed=(state.collapsed[key]!==undefined)?state.collapsed[key]:(k==="done");
     html+=`<div class="sec"><div class="sec-h${collapsed?" collapsed":""}" data-sec="${key}">
@@ -1100,7 +1119,8 @@ function renderKanban(){
   const list=visibleEvents();
   const cols=[["a-faire","À faire","#64748B"],["en-cours","En cours","#D97706"],["bloque","Bloqué","#DC2626"],["termine","Terminé","#16A34A"]];
   const card=e=>{const pk=projectOf(e),col=projColor(pk);const tg=(e.tags||[]).slice(0,3).map(t=>{const c=tagColor(t);return `<span class="minitag" style="background:${hexA(c,.13)};color:${c}">#${esc(t)}</span>`;}).join("");
-    return `<div class="kb-card" data-id="${e.id}" style="border-left-color:${col}"><div class="kt">${esc(e.title)}</div><div class="km">${tg}<span class="pctlab" style="margin-left:auto">${effProgress(e)} %</span></div></div>`;};
+    const pb=priorityBadgeHTML(e),nb=e.note?`<span title="${esc(e.note)}">💬</span>`:"";
+    return `<div class="kb-card" data-id="${e.id}" style="border-left-color:${col}"><div class="kt">${esc(e.title)}</div><div class="km">${pb}${tg}${nb}<span class="pctlab" style="margin-left:auto">${effProgress(e)} %</span></div></div>`;};
   const board=items=>`<div class="kb">`+cols.map(([k,lab,c])=>{const it=items.filter(e=>statusKey(e)===k);return `<div class="kb-col"><h4><span class="dot" style="background:${c}"></span>${lab}<span class="n">${it.length}</span></h4>${it.map(card).join("")}</div>`;}).join("")+`</div>`;
   const swim=state.group==="projet";
   let html=`<div class="viewbar"><span class="vtoggle${swim?" active":""}" id="kbSwim">⊞ Swimlanes par projet</span></div>`;
@@ -1120,6 +1140,7 @@ function parseQuickAdd(str){
   let m=s.match(/(\d{1,3})\s*%/);if(m){ev.progress=Math.min(100,+m[1]);s=s.replace(m[0]," ");}
   if(/!jalon/i.test(s)){ev.type="jalon";s=s.replace(/!jalon/ig," ");}
   if(/!(evt|event|événement|evenement)/i.test(s)){ev.type="evenement";s=s.replace(/!(evt|event|événement|evenement)/ig," ");}
+  m=s.match(/!(must|should|could)/i);if(m){ev.priority=m[1].toLowerCase();s=s.replace(m[0]," ");}
   m=s.match(/apr[eè]s\s*:\s*([^#!]+)/i);if(m){ev.deps=m[1].split(/[,;]+/).map(x=>x.trim()).filter(Boolean);s=s.replace(m[0]," ");}
   const dre=/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/g;let dates=[],dm;
   while((dm=dre.exec(s))){const dd=+dm[1],mm=+dm[2];let yy=dm[3]?(+dm[3]<100?2000+(+dm[3]):+dm[3]):2026;dates.push(`${yy}-${String(mm).padStart(2,"0")}-${String(dd).padStart(2,"0")}`);}
@@ -1185,7 +1206,7 @@ function cmdkActions(q){
   const tq=q.trim(),acts=[];
   if(tq)acts.push({ic:"＋",label:"Créer : "+tq,run:()=>{quickAdd(tq);closeCmdk();}});
   [["focus","✦","Focus"],["projets","🗂","Projets"],["kanban","▦","Kanban"],["gantt","📊","Gantt"],["bilan","◍","Bilan"]].forEach(([v,ic,l])=>acts.push({ic,label:"Aller à "+l,run:()=>{state.view=v;closeCmdk();renderView();}}));
-  [["","Tout"],["en-cours","En cours"],["bloque","Bloqués"],["retard","En retard"],["critique","Chemin critique"]].forEach(([k,l])=>acts.push({ic:"⤿",label:"Filtre : "+l,run:()=>{state.preset=k;closeCmdk();renderAll();}}));
+  [["","Tout"],["en-cours","En cours"],["bloque","Bloqués"],["retard","En retard"],["critique","Chemin critique"],["must","Must"],["should","Should"],["could","Could"]].forEach(([k,l])=>acts.push({ic:"⤿",label:"Filtre : "+l,run:()=>{state.preset=k;closeCmdk();renderAll();}}));
   acts.push({ic:"⚙",label:"Gérer projets & tags",run:()=>{closeCmdk();const b=$("#btnManage");if(b)b.click();}});
   acts.push({ic:"🔗",label:"Partager le lien",run:()=>{closeCmdk();const b=$("#btnShare");if(b)b.click();}});
   if(!tq)return acts;
@@ -1200,6 +1221,8 @@ function renderCmdk(q){cmdkItems=cmdkActions(q);cmdkSel=0;
 /* ---- Modale : statut + parent ---- */
 function setStatus(sv){sv=sv||"";$$("#fStatus .opt").forEach(o=>o.setAttribute("aria-pressed",(o.dataset.s||"")===sv));}
 function currentStatus(){const o=$("#fStatus .opt[aria-pressed='true']");return o?(o.dataset.s||""):"";}
+function setPriority(pv){pv=pv||"";$$("#fPriority .opt").forEach(o=>o.setAttribute("aria-pressed",(o.dataset.p||"")===pv));}
+function currentPriority(){const o=$("#fPriority .opt[aria-pressed='true']");return o?(o.dataset.p||""):"";}
 function populateParents(excludeId){const sel=$("#fParent");if(!sel)return;
   const opts=state.events.filter(e=>e.id!==excludeId).slice().sort((a,b)=>(a.title||"").localeCompare(b.title||""));
   sel.innerHTML=`<option value="">— Aucune (tâche racine)</option>`+opts.map(e=>`<option value="${esc(e.id)}">${esc(e.title)}</option>`).join("");
@@ -1260,8 +1283,9 @@ function rowHTML(e,extraCls){
     <div class="typ" title="${TYPE_LABEL[e.type]}" style="color:${col}">${TYPE_ICON[e.type]}</div>
     <div class="main" style="cursor:pointer">
       <div class="ttl">${esc(e.title)}${isParent?` <span style="font-size:11px;color:var(--faint);font-weight:600">(${kids.length} sous-tâches)</span>`:""}</div>
-      <div class="meta"><span class="date">${dateStr}</span>${tagsHtml}<span class="statusbadge" style="background:${hexA(st.c,.14)};color:${st.c}">${st.l}</span></div>
+      <div class="meta"><span class="date">${dateStr}</span>${tagsHtml}<span class="statusbadge" style="background:${hexA(st.c,.14)};color:${st.c}">${st.l}</span>${priorityBadgeHTML(e)}${critChainBadgeHTML(e)}</div>
       ${depsLineHTML(e)}
+      ${noteHTML(e)}
     </div>
     ${ctrl}</div>`;
 }
@@ -1277,6 +1301,39 @@ function statusOf(e){
   if(end<now)return{l:"En retard",c:"#DC2626"};
   return{l:"À démarrer",c:"#64748B"};
 }
+const PRIORITYMAP={"must":{l:"Must",c:"#DC2626"},"should":{l:"Should",c:"#D97706"},"could":{l:"Could",c:"#64748B"}};
+function priorityOf(e){return e.priority&&PRIORITYMAP[e.priority]?PRIORITYMAP[e.priority]:null;}
+function priorityBadgeHTML(e){const p=priorityOf(e);return p?`<span class="statusbadge" style="background:${hexA(p.c,.14)};color:${p.c}">${p.l}</span>`:"";}
+function noteHTML(e){return e.note?`<div class="rownote">💬 ${esc(e.note)}</div>`:"";}
+/* ---- Chemin critique reel : plus longue chaine de dependances non closes
+   (calcul par memoisation sur le graphe deps[], garde-fou anti-cycle via `seen`).
+   Distinct du tag manuel "Chemin-Critique" pose a la main sur des jalons : les
+   deux sont unionnes dans le filtre pour ne rien perdre de la curation existante. */
+let _critCache=null;
+function criticalChainSet(){
+  if(_critCache)return _critCache;
+  const memo=new Map();
+  function calc(title,seen){
+    if(memo.has(title))return memo.get(title);
+    const e=evByTitle(title);
+    if(!e||isDone(e)||seen.has(title)){const r={len:0,next:null};return r;}
+    const seen2=new Set(seen);seen2.add(title);
+    let best={len:0,next:null};
+    (e.deps||[]).forEach(d=>{
+      const dE=evByTitle(d);
+      if(dE&&!isDone(dE)){const sub=calc(d,seen2);if(1+sub.len>best.len)best={len:1+sub.len,next:d};}
+    });
+    memo.set(title,best);return best;
+  }
+  let top=null,topLen=-1;
+  state.events.filter(e=>!isDone(e)).forEach(e=>{const r=calc(e.title,new Set());if(r.len>topLen){topLen=r.len;top=e.title;}});
+  const chain=new Set();let cur=top;
+  while(cur){chain.add(cur);const r=memo.get(cur);cur=r?r.next:null;}
+  _critCache={chain,length:chain.size};
+  return _critCache;
+}
+function isOnCriticalChain(e){return criticalChainSet().chain.has(e.title);}
+function critChainBadgeHTML(e){return isOnCriticalChain(e)?`<span class="critchain" title="Sur la chaîne de dépendances la plus longue">⛓ chemin critique</span>`:"";}
 function childrenOf(e){return state.events.filter(x=>x.parent===e.id);}
 function effProgress(e){const c=childrenOf(e);if(c.length)return Math.round(c.reduce((s,x)=>s+effProgress(x),0)/c.length);return +e.progress||0;}
 function recomputeParents(){state.events.forEach(e=>{const k=childrenOf(e);if(k.length)e.progress=Math.round(k.reduce((s,x)=>s+(+x.progress||0),0)/k.length);});}
@@ -1385,7 +1442,7 @@ function openAdd(){
   $("#fStart").value=TODAY_ISO;$("#fEnd").value="";
   $("#fProg").value=0;$("#fProgV").textContent="0 %";
   draftDeps=[];renderDepChips();
-  setStatus("");populateParents(null);$("#fParent").value="";
+  setStatus("");setPriority("");$("#fNote").value="";populateParents(null);$("#fParent").value="";
   $("#evDelete").style.display="none";
   renderChips();updateEndVisibility();openScrim("#evScrim");setTimeout(()=>$("#fTitle").focus(),50);
 }
@@ -1397,7 +1454,7 @@ function openEvent(id){
   $("#fStart").value=e.start;$("#fEnd").value=e.end||"";
   $("#fProg").value=+e.progress||0;$("#fProgV").textContent=(+e.progress||0)+" %";
   draftDeps=(e.deps||[]).slice();renderDepChips();
-  setStatus(e.status||"");populateParents(id);$("#fParent").value=e.parent||"";
+  setStatus(e.status||"");setPriority(e.priority||"");$("#fNote").value=e.note||"";populateParents(id);$("#fParent").value=e.parent||"";
   $("#evDelete").style.display="";
   renderChips();updateEndVisibility();openScrim("#evScrim");setTimeout(()=>$("#fTitle").focus(),50);
 }
@@ -1466,8 +1523,9 @@ function saveEvent(){
   const progress=+$("#fProg").value||0;
   const deps=draftDeps.slice();
   const status=currentStatus();let parent=$("#fParent").value||null;if(parent===editingId)parent=null;
-  if(editingId){const e=state.events.find(x=>x.id===editingId);Object.assign(e,{title,type,start,end,progress,deps,status,parent,tags:draftTags.slice(),updatedAt:Date.now()});}
-  else{state.events.push({id:"e"+Date.now().toString(36),title,type,start,end,progress,deps,status,parent,tags:draftTags.slice(),createdAt:Date.now(),updatedAt:Date.now()});}
+  const priority=currentPriority();const note=$("#fNote").value.trim();
+  if(editingId){const e=state.events.find(x=>x.id===editingId);Object.assign(e,{title,type,start,end,progress,deps,status,parent,priority,note,tags:draftTags.slice(),updatedAt:Date.now()});}
+  else{state.events.push({id:"e"+Date.now().toString(36),title,type,start,end,progress,deps,status,parent,priority,note,tags:draftTags.slice(),createdAt:Date.now(),updatedAt:Date.now()});}
   recomputeParents();closeScrim("#evScrim");persist();renderAll();
 }
 function deleteEvent(){if(!editingId)return;if(!confirm("Supprimer cet événement ?"))return;state.events=state.events.filter(e=>e.id!==editingId);closeScrim("#evScrim");persist();renderAll();}
@@ -1484,14 +1542,14 @@ function doExport(){
 function applyRoadmapPatch(d){
   if(typeof d==="string")d=JSON.parse(d);
   const mode=d.mode||"merge";
-  const norm=e=>({id:e.id||("e"+Math.random().toString(36).slice(2,9)),title:e.title||"(sans titre)",type:e.type||"tache",start:e.start||TODAY_ISO,end:e.end||null,progress:+e.progress||0,tags:Array.isArray(e.tags)?e.tags:[],deps:Array.isArray(e.deps)?e.deps:[],note:e.note||"",parent:e.parent||null,status:e.status||""});
+  const norm=e=>({id:e.id||("e"+Math.random().toString(36).slice(2,9)),title:e.title||"(sans titre)",type:e.type||"tache",start:e.start||TODAY_ISO,end:e.end||null,progress:+e.progress||0,tags:Array.isArray(e.tags)?e.tags:[],deps:Array.isArray(e.deps)?e.deps:[],note:e.note||"",parent:e.parent||null,status:e.status||"",priority:e.priority||""});
   let added=0,upd=0;
   if(mode==="replace"){
     if(Array.isArray(d.events))state.events=d.events.map(norm);
     if(Array.isArray(d.projects)&&d.projects.length)state.projects=d.projects;
     if(Array.isArray(d.tags))state.tags=d.tags;
   }else{
-    if(Array.isArray(d.events))d.events.forEach(raw=>{const i=state.events.findIndex(x=>(raw.id&&x.id===raw.id)||(!raw.id&&x.title===raw.title));if(i>=0){const cur=state.events[i];["title","type","start","end","progress","tags","deps","note","parent","status"].forEach(k=>{if(k in raw)cur[k]=raw[k];});cur.updatedAt=Date.now();upd++;}else{state.events.push(norm(raw));added++;}});
+    if(Array.isArray(d.events))d.events.forEach(raw=>{const i=state.events.findIndex(x=>(raw.id&&x.id===raw.id)||(!raw.id&&x.title===raw.title));if(i>=0){const cur=state.events[i];["title","type","start","end","progress","tags","deps","note","parent","status","priority"].forEach(k=>{if(k in raw)cur[k]=raw[k];});cur.updatedAt=Date.now();upd++;}else{state.events.push(norm(raw));added++;}});
     if(Array.isArray(d.projects))d.projects.forEach(pp=>{const i=state.projects.findIndex(x=>x.id===pp.id||x.name===pp.name);if(i>=0)state.projects[i]=Object.assign({},state.projects[i],pp);else state.projects.push(pp);});
     if(Array.isArray(d.tags))d.tags.forEach(t=>{const i=state.tags.findIndex(x=>x.name===t.name);if(i>=0)state.tags[i]=Object.assign({},state.tags[i],t);else state.tags.push(t);});
     if(Array.isArray(d.removeEvents))d.removeEvents.forEach(k=>{state.events=state.events.filter(x=>x.id!==k&&x.title!==k);});
@@ -1528,6 +1586,7 @@ function wire(){
   const qc=$("#qaCmd");if(qc)qc.onclick=openCmdk;
   populateQuickAdd();
   $$("#fStatus .opt").forEach(o=>o.onclick=()=>setStatus(o.dataset.s));
+  $$("#fPriority .opt").forEach(o=>o.onclick=()=>setPriority(o.dataset.p));
   const ci=$("#cmdkInput");
   if(ci){ci.oninput=()=>renderCmdk(ci.value);
     ci.onkeydown=e=>{const n=cmdkItems.length;

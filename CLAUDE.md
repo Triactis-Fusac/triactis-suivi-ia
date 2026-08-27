@@ -45,8 +45,19 @@ pas les données ; seul un code d'accès différent pointerait vers un autre doc
 
 ```
 { id, title, type: 'tache'|'jalon'|'evenement', start, end, progress (0..100),
-  tags[], deps[] (titres des prérequis), note, parent (id), status, createdAt, updatedAt }
+  tags[], deps[] (titres des prérequis), note, parent (id), status, priority,
+  createdAt, updatedAt }
 ```
+
+- `priority` : MoSCoW, `'must'|'should'|'could'|''` (vide = non priorisé). Ajouté le
+  2026-08-27 suite à la demande de Jérôme Le Louët (point d'étape du 27/08) : rendre la
+  priorité explicite plutôt que de la déduire des tags. Éditable dans la modale (segment
+  Priorité), raccourci saisie rapide `!must` / `!should` / `!could`, filtres dédiés dans
+  la barre de filtres et la palette ⌘K. Trie les buckets de la vue Focus (must d'abord).
+- `note` existait déjà mais n'était affiché que dans le hero de la vue « Aujourd'hui ».
+  Depuis le 2026-08-27, un champ Commentaire est visible dans la modale d'édition et le
+  contenu s'affiche sous chaque ligne (`.rownote`) : à utiliser pour dire ce qui est fait,
+  ce qui bloque, la prochaine action attendue sur une tâche non terminée.
 
 - `updatedAt` est horodaté à chaque changement de progression, édition ou import (mais
   **pas** sur le recalcul de progression d'un parent). C'est un « dernier touché », pas un
@@ -69,6 +80,12 @@ pas les données ; seul un code d'accès différent pointerait vers un autre doc
   `--radius`, etc. Réutiliser ces variables plutôt que des couleurs en dur.
 - Hooks navigateur pour l'alimentation par les skills : `window.coworkSnapshot()` (lecture),
   `window.coworkApplyPatch(json)` (upsert + écriture Firestore).
+- `criticalChainSet()` (2026-08-27) : chemin critique calculé, pas déclaratif. Mémoïse la
+  plus longue chaîne de dépendances non closes sur le graphe `deps[]` (garde-fou anti-cycle),
+  reconstruit la chaîne qui atteint ce maximum. Distinct du tag manuel `Chemin-Critique`
+  posé à la main sur des jalons : le filtre « Chemin critique » et le badge `⛓` sur les
+  lignes/cartes font l'union des deux, pour ne rien perdre de la curation existante tout
+  en affichant le calcul réel. Cache `_critCache`, invalidé dans `persist()` et `renderAll()`.
 
 ## Vues
 
